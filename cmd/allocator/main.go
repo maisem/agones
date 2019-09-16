@@ -24,6 +24,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	allocationv1 "agones.dev/agones/pkg/apis/allocation/v1"
 	"agones.dev/agones/pkg/client/clientset/versioned"
@@ -88,14 +90,13 @@ func main() {
 	// mux for https server to serve gameserver allocations
 	httpsMux := http.NewServeMux()
 	httpsMux.HandleFunc("/v1alpha1/gameserverallocation", h.postOnly(h.allocateHandler))
+	go autoRefreshCACertPool(certDir)
 
 	cfg := &tls.Config{
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			caCertPool, err := getCACertPool(certDir)
-			if err != nil {
-				return nil, fmt.Errorf("could not get CA certs: %v", err)
-			}
+			caMutex.RLock()
+			defer caMutex.RUnlock()
 			return &tls.Config{
 				ClientAuth: tls.RequireAndVerifyClientCert,
 				ClientCAs:  caCertPool,
@@ -138,6 +139,26 @@ func getAgonesClient() (*versioned.Clientset, error) {
 		return nil, errors.New("Could not create the agones api clientset")
 	}
 	return agonesClient, nil
+}
+
+var (
+	caCertPool *x509.CertPool
+	caMutex    sync.RWMutex
+)
+
+func autoRefreshCACertPool(path string) {
+	tick := time.NewTicker(5 * time.Minute)
+	defer tick.Stop()
+	for range tick.C {
+		ca, err := getCACertPool(path)
+		if err != nil {
+			logger.WithError(err).Infof("could not get CA Certs")
+			continue
+		}
+		caMutex.Lock()
+		caCertPool = ca
+		caMutex.Unlock()
+	}
 }
 
 func getCACertPool(path string) (*x509.CertPool, error) {
