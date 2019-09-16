@@ -89,14 +89,18 @@ func main() {
 	httpsMux := http.NewServeMux()
 	httpsMux.HandleFunc("/v1alpha1/gameserverallocation", h.postOnly(h.allocateHandler))
 
-	caCertPool, err := getCACertPool(certDir)
-	if err != nil {
-		logger.WithError(err).Fatal("could not get CA certs")
-	}
-
 	cfg := &tls.Config{
 		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  caCertPool,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			caCertPool, err := getCACertPool(certDir)
+			if err != nil {
+				return nil, fmt.Errorf("could not get CA certs: %v", err)
+			}
+			return &tls.Config{
+				ClientAuth: tls.RequireAndVerifyClientCert,
+				ClientCAs:  caCertPool,
+			}, nil
+		},
 	}
 	srv := &http.Server{
 		Addr:      ":" + sslPort,
